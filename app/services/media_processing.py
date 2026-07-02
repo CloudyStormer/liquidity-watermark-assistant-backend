@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import UploadFile
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageOps
 
 from app.core.config import settings
 from app.repositories import create_operation_log, get_media_job, update_media_job
@@ -176,7 +176,7 @@ def _process_image(
 ) -> Path:
     result_path = source_path.parent / "result.png"
     with Image.open(source_path) as image:
-        output = image.convert("RGBA")
+        output = ImageOps.exif_transpose(image).convert("RGBA")
         selected_regions = regions or _default_image_regions(output.width, output.height)
 
         region_boxes = [
