@@ -242,11 +242,32 @@ def _apply_opencv_inpaint(image: Image.Image, boxes: list[tuple[int, int, int, i
     rgb_image = image.convert("RGB")
     source = np.array(rgb_image)
     mask = np.zeros((image.height, image.width), dtype=np.uint8)
+    expand = max(2, min(image.width, image.height) // 360)
     for left, top, right, bottom in boxes:
-        mask[top:bottom, left:right] = 255
+        mask[
+            max(0, top - expand) : min(image.height, bottom + expand),
+            max(0, left - expand) : min(image.width, right + expand),
+        ] = 255
 
-    repaired = cv2.inpaint(source, mask, 3, cv2.INPAINT_TELEA)
-    repaired_image = Image.fromarray(repaired).convert("RGBA")
+    if not np.any(mask):
+        return True
+
+    kernel_size = max(3, expand * 2 + 1)
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+    mask = cv2.dilate(mask, kernel, iterations=1)
+
+    radius = max(3, min(9, min(image.width, image.height) // 220))
+    telea = cv2.inpaint(source, mask, radius, cv2.INPAINT_TELEA)
+    navier = cv2.inpaint(source, mask, radius, cv2.INPAINT_NS)
+    repaired = cv2.addWeighted(telea, 0.72, navier, 0.28, 0)
+
+    alpha = mask.astype(np.float32) / 255.0
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=max(1.2, expand * 0.9))
+    alpha = np.clip(alpha[..., None], 0, 1)
+    blended_float = repaired.astype(np.float32) * alpha + source.astype(np.float32) * (1 - alpha)
+    blended = blended_float.astype(np.uint8)
+
+    repaired_image = Image.fromarray(blended).convert("RGBA")
     if image.mode == "RGBA":
         repaired_image.putalpha(image.getchannel("A"))
     image.paste(repaired_image)
