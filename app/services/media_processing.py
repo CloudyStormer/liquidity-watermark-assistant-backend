@@ -1,3 +1,5 @@
+import base64
+import io
 import json
 import shutil
 import subprocess
@@ -5,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import UploadFile
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from app.core.config import settings
 from app.repositories import create_operation_log, get_media_job, update_media_job
@@ -226,10 +228,128 @@ def _apply_blur(image: Image.Image, box: tuple[int, int, int, int], radius: int)
 def _apply_inpaint_regions(image: Image.Image, boxes: list[tuple[int, int, int, int]]) -> None:
     if not boxes:
         return
+    if _apply_external_ai_inpaint(image, boxes):
+        return
     if _apply_opencv_inpaint(image, boxes):
         return
     for box in boxes:
         _apply_soft_fill(image, box)
+
+
+def _apply_external_ai_inpaint(image: Image.Image, boxes: list[tuple[int, int, int, int]]) -> bool:
+    engine = settings.inpaint_engine.lower()
+    if engine == "local":
+        return False
+    if not settings.ai_inpaint_url:
+        if engine == "external":
+            raise RuntimeError("AI inpaint service is not configured")
+        return False
+
+    try:
+        import httpx
+
+        image_bytes = _image_to_png_bytes(image.convert("RGB"))
+        mask_bytes = _image_to_png_bytes(_build_inpaint_mask(image.size, boxes))
+        headers = {}
+        if settings.ai_inpaint_api_key:
+            headers["Authorization"] = f"Bearer {settings.ai_inpaint_api_key}"
+
+        with httpx.Client(timeout=settings.ai_inpaint_timeout_seconds) as client:
+            response = client.post(
+                settings.ai_inpaint_url,
+                headers=headers,
+                data={
+                    "prompt": (
+                        "Remove the marked watermark and reconstruct the original background."
+                    ),
+                    "negative_prompt": "watermark, text, logo, blur, smearing, distorted pattern",
+                    "response_format": "image",
+                },
+                files={
+                    "image": ("image.png", image_bytes, "image/png"),
+                    "mask": ("mask.png", mask_bytes, "image/png"),
+                },
+            )
+            response.raise_for_status()
+            result_image = _decode_ai_inpaint_response(client, response)
+    except Exception as exc:
+        if engine == "external":
+            raise RuntimeError("AI inpaint service failed") from exc
+        return False
+
+    if result_image.size != image.size:
+        result_image = result_image.resize(image.size, Image.Resampling.LANCZOS)
+    result_image = result_image.convert("RGBA")
+    if image.mode == "RGBA":
+        result_image.putalpha(image.getchannel("A"))
+    image.paste(result_image)
+    return True
+
+
+def _build_inpaint_mask(
+    size: tuple[int, int],
+    boxes: list[tuple[int, int, int, int]],
+) -> Image.Image:
+    width, height = size
+    mask = Image.new("L", size, 0)
+    draw = ImageDraw.Draw(mask)
+    expand = max(1, min(6, min(width, height) // 320))
+    for left, top, right, bottom in boxes:
+        draw.rectangle(
+            (
+                max(0, left - expand),
+                max(0, top - expand),
+                min(width, right + expand),
+                min(height, bottom + expand),
+            ),
+            fill=255,
+        )
+    return mask.filter(ImageFilter.MaxFilter(3))
+
+
+def _image_to_png_bytes(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _decode_ai_inpaint_response(client, response) -> Image.Image:
+    content_type = response.headers.get("content-type", "").lower()
+    if content_type.startswith("image/"):
+        return Image.open(io.BytesIO(response.content)).convert("RGBA")
+
+    payload = response.json()
+    encoded = _first_payload_value(payload, ("image_base64", "result_base64", "b64_json"))
+    if encoded:
+        if "," in encoded and encoded.lower().startswith("data:image"):
+            encoded = encoded.split(",", 1)[1]
+        return Image.open(io.BytesIO(base64.b64decode(encoded))).convert("RGBA")
+
+    result_url = _first_payload_value(payload, ("url", "result_url", "image_url", "output_url"))
+    if result_url:
+        follow_up = client.get(result_url)
+        follow_up.raise_for_status()
+        return Image.open(io.BytesIO(follow_up.content)).convert("RGBA")
+
+    raise RuntimeError("AI inpaint response does not contain an image")
+
+
+def _first_payload_value(payload, keys: tuple[str, ...]) -> str:
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        for value in payload.values():
+            found = _first_payload_value(value, keys)
+            if found:
+                return found
+    if isinstance(payload, list):
+        for item in payload:
+            found = _first_payload_value(item, keys)
+            if found:
+                return found
+    return ""
 
 
 def _apply_opencv_inpaint(image: Image.Image, boxes: list[tuple[int, int, int, int]]) -> bool:

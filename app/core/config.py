@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 200 * 1024 * 1024
     ffmpeg_path: str = "ffmpeg"
     daily_free_quota: int = 3
+    inpaint_engine: str = "auto"
+    ai_inpaint_url: str = ""
+    ai_inpaint_api_key: str = ""
+    ai_inpaint_timeout_seconds: float = 45.0
     weapp_appid: str = ""
     weapp_secret: str = ""
     weapp_code2session_url: str = "https://api.weixin.qq.com/sns/jscode2session"
