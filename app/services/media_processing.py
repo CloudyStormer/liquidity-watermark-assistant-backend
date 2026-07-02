@@ -242,7 +242,7 @@ def _apply_opencv_inpaint(image: Image.Image, boxes: list[tuple[int, int, int, i
     rgb_image = image.convert("RGB")
     source = np.array(rgb_image)
     mask = np.zeros((image.height, image.width), dtype=np.uint8)
-    expand = max(2, min(image.width, image.height) // 360)
+    expand = max(1, min(4, min(image.width, image.height) // 420))
     for left, top, right, bottom in boxes:
         mask[
             max(0, top - expand) : min(image.height, bottom + expand),
@@ -256,13 +256,10 @@ def _apply_opencv_inpaint(image: Image.Image, boxes: list[tuple[int, int, int, i
     kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
     mask = cv2.dilate(mask, kernel, iterations=1)
 
-    radius = max(3, min(9, min(image.width, image.height) // 220))
-    telea = cv2.inpaint(source, mask, radius, cv2.INPAINT_TELEA)
-    navier = cv2.inpaint(source, mask, radius, cv2.INPAINT_NS)
-    repaired = cv2.addWeighted(telea, 0.72, navier, 0.28, 0)
+    repaired = _opencv_multiscale_inpaint(cv2, source, mask)
 
     alpha = mask.astype(np.float32) / 255.0
-    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=max(1.2, expand * 0.9))
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=max(0.9, expand * 0.65))
     alpha = np.clip(alpha[..., None], 0, 1)
     blended_float = repaired.astype(np.float32) * alpha + source.astype(np.float32) * (1 - alpha)
     blended = blended_float.astype(np.uint8)
@@ -272,6 +269,33 @@ def _apply_opencv_inpaint(image: Image.Image, boxes: list[tuple[int, int, int, i
         repaired_image.putalpha(image.getchannel("A"))
     image.paste(repaired_image)
     return True
+
+
+def _opencv_multiscale_inpaint(cv2, source, mask):
+    height, width = mask.shape
+    mask_pixels = int((mask > 0).sum())
+    large_mask = mask_pixels > int(mask.size * 0.02)
+
+    max_side = max(width, height)
+    prefilled = source
+    if max_side > 720 or large_mask:
+        scale = min(1.0, 720 / max_side)
+        coarse_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        small_source = cv2.resize(source, coarse_size, interpolation=cv2.INTER_AREA)
+        small_mask = cv2.resize(mask, coarse_size, interpolation=cv2.INTER_NEAREST)
+        coarse_radius = 3 if large_mask else 4
+        coarse = cv2.inpaint(small_source, small_mask, coarse_radius, cv2.INPAINT_NS)
+        coarse = cv2.resize(coarse, (width, height), interpolation=cv2.INTER_CUBIC)
+        prefilled = source.copy()
+        prefilled[mask > 0] = coarse[mask > 0]
+
+    radius = 2 if large_mask else max(2, min(4, min(width, height) // 360))
+    navier = cv2.inpaint(prefilled, mask, radius, cv2.INPAINT_NS)
+    telea = cv2.inpaint(prefilled, mask, radius, cv2.INPAINT_TELEA)
+
+    if large_mask:
+        return cv2.addWeighted(navier, 0.82, telea, 0.18, 0)
+    return cv2.addWeighted(telea, 0.58, navier, 0.42, 0)
 
 
 def _apply_soft_fill(image: Image.Image, box: tuple[int, int, int, int]) -> None:
