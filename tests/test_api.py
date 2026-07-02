@@ -117,6 +117,40 @@ def test_weapp_login_requires_backend_config(monkeypatch) -> None:
     assert response.status_code == 503
 
 
+def test_avatar_upload_requires_logged_in_user() -> None:
+    image_buffer = BytesIO()
+    Image.new("RGB", (32, 32), color="blue").save(image_buffer, format="PNG")
+    image_buffer.seek(0)
+
+    response = client.post(
+        f"/api/users/openid_missing_{uuid4().hex}/avatar",
+        files={"file": ("avatar.png", image_buffer, "image/png")},
+    )
+
+    assert response.status_code == 401
+
+
+def test_avatar_upload_and_download() -> None:
+    openid = f"openid_avatar_{uuid4().hex}"
+    client.post("/api/users/login", json={"openid": openid, "nickname": "avatar tester"})
+
+    image_buffer = BytesIO()
+    Image.new("RGB", (32, 32), color="blue").save(image_buffer, format="PNG")
+    image_buffer.seek(0)
+
+    response = client.post(
+        f"/api/users/{openid}/avatar",
+        files={"file": ("avatar.png", image_buffer, "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["avatar_url"] == f"/api/users/{openid}/avatar"
+
+    download_response = client.get(f"/api/users/{openid}/avatar")
+    assert download_response.status_code == 200
+    assert download_response.headers["content-type"].startswith("image/png")
+
+
 def test_daily_quota_defaults_to_three_and_can_grant() -> None:
     openid = f"openid_quota_{uuid4().hex}"
     login_response = client.post("/api/users/login", json={"openid": openid})
