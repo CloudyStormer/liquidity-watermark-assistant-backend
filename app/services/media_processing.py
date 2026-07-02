@@ -222,12 +222,20 @@ def _process_video(
 
 def _apply_blur(image: Image.Image, box: tuple[int, int, int, int], radius: int) -> None:
     left, top, right, bottom = box
-    width = right - left
-    height = bottom - top
-    if width <= 0 or height <= 0:
+    raw_width = right - left
+    raw_height = bottom - top
+    if raw_width <= 0 or raw_height <= 0:
         return
 
-    pad = max(8, min(48, max(width, height) // 3))
+    bleed = max(2, min(16, min(raw_width, raw_height) // 8))
+    left = max(0, left - bleed)
+    top = max(0, top - bleed)
+    right = min(image.width, right + bleed)
+    bottom = min(image.height, bottom + bleed)
+    width = right - left
+    height = bottom - top
+
+    pad = max(16, min(72, max(width, height) // 2))
     sample_box = (
         max(0, left - pad),
         max(0, top - pad),
@@ -238,27 +246,28 @@ def _apply_blur(image: Image.Image, box: tuple[int, int, int, int], radius: int)
     offset_top = top - sample_box[1]
 
     source_patch = image.crop(sample_box).convert("RGBA")
-    strong_radius = max(18, min(64, int(radius * 1.8)))
+    strong_radius = max(36, min(110, int(radius * 3.4)))
     blurred = source_patch.filter(ImageFilter.GaussianBlur(radius=strong_radius))
+    blurred = blurred.filter(ImageFilter.GaussianBlur(radius=max(10, strong_radius // 2)))
 
-    # Add a soft translucent wash so text/logo remnants become less readable.
+    # Add a translucent wash so text/logo remnants become unreadable while edges stay soft.
     average_color = blurred.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
-    wash_alpha = 58 if max(width, height) > 80 else 44
+    wash_alpha = 150 if max(width, height) > 80 else 126
     wash = Image.new("RGBA", blurred.size, average_color[:3] + (wash_alpha,))
     blurred = Image.alpha_composite(blurred, wash)
 
     target_patch = blurred.crop((offset_left, offset_top, offset_left + width, offset_top + height))
-    feather = max(5, min(28, min(width, height) // 3))
+    feather = max(6, min(34, min(width, height) // 4))
     mask = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(mask)
     if width > feather * 2 and height > feather * 2:
-        draw.rectangle((feather, feather, width - feather, height - feather), fill=225)
+        draw.rectangle((feather, feather, width - feather, height - feather), fill=255)
         mask = mask.filter(ImageFilter.GaussianBlur(radius=max(2, feather)))
-        mask = mask.point(lambda value: min(230, value + 42))
+        mask = mask.point(lambda value: min(255, value + 78))
     else:
-        mask = Image.new("L", (width, height), 205)
+        mask = Image.new("L", (width, height), 238)
 
-    image.paste(target_patch, box, mask)
+    image.paste(target_patch, (left, top, right, bottom), mask)
 
 
 def _apply_inpaint_regions(image: Image.Image, boxes: list[tuple[int, int, int, int]]) -> None:
