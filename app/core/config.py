@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 200 * 1024 * 1024
     ffmpeg_path: str = "ffmpeg"
     daily_free_quota: int = 3
-    inpaint_engine: str = "auto"
+    inpaint_engine: str = "local"
     ai_inpaint_url: str = ""
     ai_inpaint_api_key: str = ""
     ai_inpaint_timeout_seconds: float = 45.0

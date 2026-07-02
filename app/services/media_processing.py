@@ -221,8 +221,44 @@ def _process_video(
 
 
 def _apply_blur(image: Image.Image, box: tuple[int, int, int, int], radius: int) -> None:
-    patch = image.crop(box).filter(ImageFilter.GaussianBlur(radius=radius))
-    image.paste(patch, box)
+    left, top, right, bottom = box
+    width = right - left
+    height = bottom - top
+    if width <= 0 or height <= 0:
+        return
+
+    pad = max(8, min(48, max(width, height) // 3))
+    sample_box = (
+        max(0, left - pad),
+        max(0, top - pad),
+        min(image.width, right + pad),
+        min(image.height, bottom + pad),
+    )
+    offset_left = left - sample_box[0]
+    offset_top = top - sample_box[1]
+
+    source_patch = image.crop(sample_box).convert("RGBA")
+    strong_radius = max(18, min(64, int(radius * 1.8)))
+    blurred = source_patch.filter(ImageFilter.GaussianBlur(radius=strong_radius))
+
+    # Add a soft translucent wash so text/logo remnants become less readable.
+    average_color = blurred.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+    wash_alpha = 58 if max(width, height) > 80 else 44
+    wash = Image.new("RGBA", blurred.size, average_color[:3] + (wash_alpha,))
+    blurred = Image.alpha_composite(blurred, wash)
+
+    target_patch = blurred.crop((offset_left, offset_top, offset_left + width, offset_top + height))
+    feather = max(5, min(28, min(width, height) // 3))
+    mask = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    if width > feather * 2 and height > feather * 2:
+        draw.rectangle((feather, feather, width - feather, height - feather), fill=225)
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=max(2, feather)))
+        mask = mask.point(lambda value: min(230, value + 42))
+    else:
+        mask = Image.new("L", (width, height), 205)
+
+    image.paste(target_patch, box, mask)
 
 
 def _apply_inpaint_regions(image: Image.Image, boxes: list[tuple[int, int, int, int]]) -> None:
@@ -238,12 +274,10 @@ def _apply_inpaint_regions(image: Image.Image, boxes: list[tuple[int, int, int, 
 
 def _apply_external_ai_inpaint(image: Image.Image, boxes: list[tuple[int, int, int, int]]) -> bool:
     engine = settings.inpaint_engine.lower()
-    if engine == "local":
+    if engine != "external":
         return False
     if not settings.ai_inpaint_url:
-        if engine == "external":
-            raise RuntimeError("AI inpaint service is not configured")
-        return False
+        raise RuntimeError("AI inpaint service is not configured")
 
     try:
         import httpx
