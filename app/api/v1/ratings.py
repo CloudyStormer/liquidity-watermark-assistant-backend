@@ -1,8 +1,8 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.repositories import create_rating, list_ratings
+from app.repositories import create_rating, get_user, list_ratings
 from app.schemas.requests import RatingRequest
 from app.schemas.responses import RatingResponse
 from app.services.logging import log_operation
@@ -12,6 +12,7 @@ router = APIRouter()
 
 @router.post("", response_model=RatingResponse, status_code=201)
 def submit_rating(payload: RatingRequest, request: Request) -> RatingResponse:
+    _require_logged_in(payload.openid)
     rating = create_rating(
         openid=payload.openid,
         score=payload.score,
@@ -36,6 +37,7 @@ def get_user_ratings(
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[RatingResponse]:
+    _require_logged_in(openid)
     log_operation(
         request,
         openid=openid,
@@ -45,3 +47,8 @@ def get_user_ratings(
         detail={"limit": limit, "offset": offset},
     )
     return list_ratings(openid, limit=limit, offset=offset)
+
+
+def _require_logged_in(openid: str) -> None:
+    if get_user(openid) is None:
+        raise HTTPException(status_code=401, detail="User must login first")

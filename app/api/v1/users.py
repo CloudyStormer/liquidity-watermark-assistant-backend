@@ -126,6 +126,9 @@ def get_user_logs(
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[OperationLogResponse]:
+    profile = get_user_profile(openid)
+    if profile is None:
+        raise HTTPException(status_code=401, detail="User must login first")
     log_operation(
         request,
         openid=openid,

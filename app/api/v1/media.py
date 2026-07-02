@@ -292,6 +292,7 @@ def get_user_jobs(
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[MediaJobResponse]:
+    _require_logged_in(openid)
     log_operation(
         request,
         openid=openid,

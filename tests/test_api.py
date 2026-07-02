@@ -153,6 +153,22 @@ def test_upload_requires_login() -> None:
     assert response.status_code == 401
 
 
+def test_feedback_and_rating_require_login() -> None:
+    openid = f"openid_not_logged_in_{uuid4().hex}"
+
+    rating_response = client.post(
+        "/api/ratings",
+        json={"openid": openid, "score": 5},
+    )
+    feedback_response = client.post(
+        "/api/feedback",
+        json={"openid": openid, "type": "general", "content": "need help"},
+    )
+
+    assert rating_response.status_code == 401
+    assert feedback_response.status_code == 401
+
+
 def test_upload_requires_rights_confirmation() -> None:
     image_buffer = BytesIO()
     Image.new("RGB", (64, 64), color="white").save(image_buffer, format="PNG")
