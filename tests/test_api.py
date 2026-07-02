@@ -66,6 +66,8 @@ def test_login_profile_rating_feedback_and_logs() -> None:
     assert profile_response.status_code == 200
     assert profile_response.json()["ratings_count"] == 1
     assert profile_response.json()["feedback_count"] == 1
+    assert profile_response.json()["latest_rating_score"] == 5
+    assert profile_response.json()["usage_total"] == 0
 
     logs_response = client.get(f"/api/users/{openid}/logs")
     assert logs_response.status_code == 200
@@ -256,6 +258,9 @@ def test_image_upload_job_returns_result_md5() -> None:
     assert quota_response.status_code == 200
     assert quota_response.json()["used"] == 1
     assert quota_response.json()["remaining"] == 2
+    profile_response = client.get(f"/api/users/{openid}/profile")
+    assert profile_response.status_code == 200
+    assert profile_response.json()["usage_total"] == 1
 
 
 def test_md5_upload_creates_unique_download() -> None:
@@ -278,3 +283,8 @@ def test_md5_upload_creates_unique_download() -> None:
     download_response = client.get(payload["result_url"])
     assert download_response.status_code == 200
     assert download_response.content.endswith(b"\n")
+
+    quota_response = client.get(f"/api/users/{openid}/quota")
+    assert quota_response.status_code == 200
+    assert quota_response.json()["used"] == 1
+    assert quota_response.json()["remaining"] == 2

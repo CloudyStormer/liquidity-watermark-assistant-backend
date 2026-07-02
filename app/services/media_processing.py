@@ -12,9 +12,9 @@ from app.repositories import create_operation_log, get_media_job, update_media_j
 from app.schemas.common import CleanupMethod, JobStatus, MediaType, WatermarkRegion
 from app.services.file_hashing import calculate_md5
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
-IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+IMAGE_CONTENT_TYPES = {"image/jpeg", "image/png"}
 VIDEO_CONTENT_TYPES = {
     "video/mp4",
     "video/quicktime",
@@ -40,7 +40,7 @@ def detect_media_type(filename: str | None, content_type: str | None) -> MediaTy
     if suffix in VIDEO_EXTENSIONS or normalized_content_type in VIDEO_CONTENT_TYPES:
         return MediaType.VIDEO
 
-    raise ValueError("Only image jpg/png/webp and video mp4/mov/webm/avi/mkv uploads are supported")
+    raise ValueError("Only image jpg/png and video mp4/mov/webm/avi/mkv uploads are supported")
 
 
 async def save_upload(job_id: str, upload: UploadFile) -> UploadSaveResult:
@@ -179,13 +179,16 @@ def _process_image(
         output = image.convert("RGBA")
         selected_regions = regions or _default_image_regions(output.width, output.height)
 
-        for region in selected_regions:
-            box = _clamped_box(region, output.width, output.height)
-            if box is None:
-                continue
-            if method == CleanupMethod.INPAINT:
-                _apply_soft_fill(output, box)
-            else:
+        region_boxes = [
+            (region, box)
+            for region in selected_regions
+            if (box := _clamped_box(region, output.width, output.height)) is not None
+        ]
+        boxes = [box for _, box in region_boxes]
+        if method == CleanupMethod.INPAINT:
+            _apply_inpaint_regions(output, boxes)
+        else:
+            for region, box in region_boxes:
                 _apply_blur(output, box, region.blur_radius)
 
         output.save(result_path, format="PNG")
@@ -218,6 +221,36 @@ def _process_video(
 def _apply_blur(image: Image.Image, box: tuple[int, int, int, int], radius: int) -> None:
     patch = image.crop(box).filter(ImageFilter.GaussianBlur(radius=radius))
     image.paste(patch, box)
+
+
+def _apply_inpaint_regions(image: Image.Image, boxes: list[tuple[int, int, int, int]]) -> None:
+    if not boxes:
+        return
+    if _apply_opencv_inpaint(image, boxes):
+        return
+    for box in boxes:
+        _apply_soft_fill(image, box)
+
+
+def _apply_opencv_inpaint(image: Image.Image, boxes: list[tuple[int, int, int, int]]) -> bool:
+    try:
+        import cv2  # type: ignore[import-not-found]
+        import numpy as np  # type: ignore[import-not-found]
+    except Exception:
+        return False
+
+    rgb_image = image.convert("RGB")
+    source = np.array(rgb_image)
+    mask = np.zeros((image.height, image.width), dtype=np.uint8)
+    for left, top, right, bottom in boxes:
+        mask[top:bottom, left:right] = 255
+
+    repaired = cv2.inpaint(source, mask, 3, cv2.INPAINT_TELEA)
+    repaired_image = Image.fromarray(repaired).convert("RGBA")
+    if image.mode == "RGBA":
+        repaired_image.putalpha(image.getchannel("A"))
+    image.paste(repaired_image)
+    return True
 
 
 def _apply_soft_fill(image: Image.Image, box: tuple[int, int, int, int]) -> None:

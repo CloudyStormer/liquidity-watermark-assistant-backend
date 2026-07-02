@@ -40,8 +40,12 @@ class UserResponse(BaseModel):
 
 class UserProfileResponse(BaseModel):
     user: UserResponse
+    usage_total: int
     total_jobs: int
     succeeded_jobs: int
     failed_jobs: int
     ratings_count: int
     feedback_count: int
+    latest_rating_score: int | None = None
+    latest_rating_comment: str | None = None
+    latest_rating_at: datetime | None = None

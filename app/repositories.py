@@ -75,14 +75,20 @@ def get_user_profile(openid: str) -> UserProfileResponse | None:
         failed_jobs = _count(connection, "media_jobs", openid, status=JobStatus.FAILED.value)
         ratings_count = _count(connection, "ratings", openid)
         feedback_count = _count(connection, "feedback", openid)
+        usage_total = _sum_daily_quota_used(connection, openid)
+        latest_rating = _latest_rating(connection, openid)
 
     return UserProfileResponse(
         user=_row_to_user(user_row),
+        usage_total=usage_total,
         total_jobs=total_jobs,
         succeeded_jobs=succeeded_jobs,
         failed_jobs=failed_jobs,
         ratings_count=ratings_count,
         feedback_count=feedback_count,
+        latest_rating_score=latest_rating.score if latest_rating else None,
+        latest_rating_comment=latest_rating.comment if latest_rating else None,
+        latest_rating_at=latest_rating.created_at if latest_rating else None,
     )
 
 
@@ -362,6 +368,27 @@ def _count(connection, table: str, openid: str, *, status: str | None = None) ->
             (openid, status),
         ).fetchone()
     return int(row["count"])
+
+
+def _sum_daily_quota_used(connection, openid: str) -> int:
+    row = connection.execute(
+        "SELECT COALESCE(SUM(used), 0) AS total_used FROM daily_quotas WHERE openid = ?",
+        (openid,),
+    ).fetchone()
+    return int(row["total_used"])
+
+
+def _latest_rating(connection, openid: str) -> RatingResponse | None:
+    row = connection.execute(
+        """
+        SELECT * FROM ratings
+        WHERE openid = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (openid,),
+    ).fetchone()
+    return _row_to_rating(row) if row is not None else None
 
 
 def _row_to_user(row: Row) -> UserResponse:

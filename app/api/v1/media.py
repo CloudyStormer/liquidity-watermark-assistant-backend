@@ -148,6 +148,16 @@ async def create_md5_variant(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     job_id = source_path.parent.name
+    quota = consume_daily_quota(openid)
+    if quota is None:
+        log_operation(
+            request,
+            openid=openid,
+            action="md5_upload_rejected",
+            detail={"reason": "quota_depleted", "filename": file.filename},
+        )
+        raise HTTPException(status_code=429, detail="Daily free quota has been used up")
+
     original_md5 = calculate_md5(source_path)
     result_path = create_unique_media_copy(source_path)
     unique_md5 = calculate_md5(result_path)
