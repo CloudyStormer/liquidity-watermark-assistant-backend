@@ -17,6 +17,19 @@ CONTENT_CHECK_UNAVAILABLE_MESSAGE = "内容安全检测暂不可用，请稍后�
 _TOKEN_VALUE = ""
 _TOKEN_EXPIRES_AT = 0.0
 
+_LOCAL_TEXT_RISK_TERMS = (
+    "买卖枪支",
+    "出售枪支",
+    "买枪",
+    "卖枪",
+    "枪支弹药",
+    "假证",
+    "出售假证",
+    "裸聊",
+    "色情",
+    "成人视频",
+)
+
 
 class ContentSecurityViolation(ValueError):
     pass
@@ -40,7 +53,23 @@ def ensure_safe_text(
     target_type: str = "text",
 ) -> None:
     normalized = (content or "").strip()
-    if not normalized or not settings.weapp_content_security_configured:
+    if not normalized:
+        return
+    if _has_local_text_risk(normalized):
+        result = CheckResult(
+            passed=False,
+            raw={"errcode": "local_risk", "result": {"label": "local"}},
+        )
+        _log_check_result(
+            openid,
+            result,
+            media_type="text",
+            scene=scene,
+            target_type=target_type,
+            detail={"content_length": len(normalized), "source": "local"},
+        )
+        raise ContentSecurityViolation(CONTENT_RISK_MESSAGE)
+    if not _content_security_should_run():
         return
 
     for chunk in _text_chunks(normalized):
@@ -68,12 +97,21 @@ def ensure_safe_image(
     *,
     scene: int = 1,
     target_type: str = "image",
+    media_url: str | None = None,
 ) -> None:
-    if not settings.weapp_content_security_configured:
+    if not _content_security_should_run():
         return
 
     media = _prepare_image_for_check(image_path)
     token = _get_access_token()
+    if media_url:
+        _submit_media_check_async(
+            openid,
+            media_url=media_url,
+            scene=scene,
+            target_type=target_type,
+            filename=image_path.name,
+        )
     try:
         response = httpx.post(
             settings.weapp_img_sec_check_url,
@@ -96,6 +134,60 @@ def ensure_safe_image(
         detail={"filename": image_path.name},
     )
     _raise_if_unsafe(result)
+
+
+def _content_security_should_run() -> bool:
+    if not settings.weapp_content_security_enabled:
+        return False
+    if not settings.weapp_appid or not settings.weapp_secret:
+        raise ContentSecurityUnavailable(CONTENT_CHECK_UNAVAILABLE_MESSAGE)
+    return True
+
+
+def _submit_media_check_async(
+    openid: str,
+    *,
+    media_url: str,
+    scene: int,
+    target_type: str,
+    filename: str,
+) -> None:
+    token = _get_access_token()
+    payload = {
+        "media_url": media_url,
+        "media_type": 2,
+        "version": 2,
+        "scene": scene,
+        "openid": openid,
+    }
+    try:
+        response = httpx.post(
+            settings.weapp_media_check_async_url,
+            params={"access_token": token},
+            json=payload,
+            timeout=settings.weapp_sec_check_timeout_seconds,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ContentSecurityUnavailable(CONTENT_CHECK_UNAVAILABLE_MESSAGE) from exc
+
+    errcode = int(data.get("errcode") or 0)
+    if errcode != 0:
+        raise ContentSecurityUnavailable(CONTENT_CHECK_UNAVAILABLE_MESSAGE)
+
+    create_operation_log(
+        openid=openid,
+        action="content_security_submitted",
+        target_type=target_type,
+        detail={
+            "media_type": "image",
+            "scene": scene,
+            "filename": filename,
+            "trace_id": data.get("trace_id"),
+            "api": "media_check_async",
+        },
+    )
 
 
 def _post_json_sec_check(url: str, payload: dict) -> CheckResult:
@@ -209,3 +301,8 @@ def _prepare_image_for_check(image_path: Path) -> bytes:
 def _text_chunks(content: str) -> list[str]:
     limit = 1800
     return [content[index : index + limit] for index in range(0, len(content), limit)]
+
+
+def _has_local_text_risk(content: str) -> bool:
+    lowered = content.lower()
+    return any(term.lower() in lowered for term in _LOCAL_TEXT_RISK_TERMS)

@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import shutil
 from datetime import UTC, datetime
@@ -92,7 +94,13 @@ async def create_upload_job(
 
     if saved.media_type == MediaType.IMAGE:
         try:
-            ensure_safe_image(openid, saved.source_path, scene=1)
+            ensure_safe_image(
+                openid,
+                saved.source_path,
+                scene=1,
+                target_type="media_job_source",
+                media_url=_source_security_url(job_id, saved.source_path),
+            )
         except ContentSecurityViolation as exc:
             shutil.rmtree(saved.source_path.parent, ignore_errors=True)
             log_operation(
@@ -325,6 +333,19 @@ def download_job_result(
     )
 
 
+@router.get("/jobs/{job_id}/source-security")
+def download_source_for_security_check(
+    job_id: str,
+    token: Annotated[str, Query(min_length=16)],
+) -> FileResponse:
+    source_path = _find_source_path(job_id)
+    if source_path is None:
+        raise HTTPException(status_code=404, detail="Source file not found")
+    if not hmac.compare_digest(token, _source_security_token(job_id, source_path)):
+        raise HTTPException(status_code=403, detail="Invalid security token")
+    return FileResponse(source_path, media_type=_source_media_type(source_path.suffix))
+
+
 @router.get("/users/{openid}/jobs", response_model=list[MediaJobResponse])
 def get_user_jobs(
     openid: str,
@@ -356,6 +377,36 @@ def _get_owned_job(job_id: str, openid: str) -> MediaJobResponse:
 def _require_logged_in(openid: str) -> None:
     if get_user(openid) is None:
         raise HTTPException(status_code=401, detail="User must login first")
+
+
+def _source_security_url(job_id: str, source_path: Path) -> str | None:
+    if not settings.public_api_base_url:
+        return None
+    token = _source_security_token(job_id, source_path)
+    base_url = settings.public_api_base_url.rstrip("/")
+    return f"{base_url}/media/jobs/{job_id}/source-security?token={token}"
+
+
+def _source_security_token(job_id: str, source_path: Path) -> str:
+    secret = settings.weapp_secret or settings.weapp_appid or "watermark-assistant"
+    message = f"{job_id}:{source_path.name}"
+    return hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _find_source_path(job_id: str) -> Path | None:
+    source_dir = settings.storage_dir_path / "jobs" / job_id
+    if not source_dir.exists():
+        return None
+    matches = sorted(source_dir.glob("source.*"))
+    return matches[-1] if matches else None
+
+
+def _source_media_type(suffix: str) -> str:
+    if suffix.lower() == ".png":
+        return "image/png"
+    if suffix.lower() in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    return "application/octet-stream"
 
 
 async def _save_md5_upload(job_id: str, upload: UploadFile) -> tuple[Path, str, int]:

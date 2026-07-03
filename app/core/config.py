@@ -25,8 +25,10 @@ class Settings(BaseSettings):
     weapp_code2session_url: str = "https://api.weixin.qq.com/sns/jscode2session"
     weapp_msg_sec_check_url: str = "https://api.weixin.qq.com/wxa/msg_sec_check"
     weapp_img_sec_check_url: str = "https://api.weixin.qq.com/wxa/img_sec_check"
+    weapp_media_check_async_url: str = "https://api.weixin.qq.com/wxa/media_check_async"
     weapp_login_timeout_seconds: float = 6.0
     weapp_sec_check_timeout_seconds: float = 10.0
+    public_api_base_url: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
