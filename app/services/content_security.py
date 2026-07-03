@@ -9,6 +9,7 @@ import httpx
 from PIL import Image, ImageOps
 
 from app.core.config import settings
+from app.repositories import create_operation_log
 
 CONTENT_RISK_MESSAGE = "用户所发布内容含违规信息，请更换后再提交"
 CONTENT_CHECK_UNAVAILABLE_MESSAGE = "内容安全检测暂不可用，请稍后再试"
@@ -31,7 +32,13 @@ class CheckResult:
     raw: dict
 
 
-def ensure_safe_text(openid: str, content: str | None, *, scene: int = 2) -> None:
+def ensure_safe_text(
+    openid: str,
+    content: str | None,
+    *,
+    scene: int = 2,
+    target_type: str = "text",
+) -> None:
     normalized = (content or "").strip()
     if not normalized or not settings.weapp_content_security_configured:
         return
@@ -44,10 +51,24 @@ def ensure_safe_text(openid: str, content: str | None, *, scene: int = 2) -> Non
             "openid": openid,
         }
         result = _post_json_sec_check(settings.weapp_msg_sec_check_url, payload)
+        _log_check_result(
+            openid,
+            result,
+            media_type="text",
+            scene=scene,
+            target_type=target_type,
+            detail={"content_length": len(chunk)},
+        )
         _raise_if_unsafe(result)
 
 
-def ensure_safe_image(openid: str, image_path: Path, *, scene: int = 1) -> None:
+def ensure_safe_image(
+    openid: str,
+    image_path: Path,
+    *,
+    scene: int = 1,
+    target_type: str = "image",
+) -> None:
     if not settings.weapp_content_security_configured:
         return
 
@@ -65,7 +86,16 @@ def ensure_safe_image(openid: str, image_path: Path, *, scene: int = 1) -> None:
     except (httpx.HTTPError, ValueError) as exc:
         raise ContentSecurityUnavailable(CONTENT_CHECK_UNAVAILABLE_MESSAGE) from exc
 
-    _raise_if_unsafe(CheckResult(passed=_is_pass_payload(payload), raw=payload))
+    result = CheckResult(passed=_is_pass_payload(payload), raw=payload)
+    _log_check_result(
+        openid,
+        result,
+        media_type="image",
+        scene=scene,
+        target_type=target_type,
+        detail={"filename": image_path.name},
+    )
+    _raise_if_unsafe(result)
 
 
 def _post_json_sec_check(url: str, payload: dict) -> CheckResult:
@@ -133,6 +163,32 @@ def _is_pass_payload(payload: dict) -> bool:
 def _raise_if_unsafe(result: CheckResult) -> None:
     if not result.passed:
         raise ContentSecurityViolation(CONTENT_RISK_MESSAGE)
+
+
+def _log_check_result(
+    openid: str,
+    result: CheckResult,
+    *,
+    media_type: str,
+    scene: int,
+    target_type: str,
+    detail: dict | None = None,
+) -> None:
+    payload = result.raw
+    result_payload = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    create_operation_log(
+        openid=openid,
+        action="content_security_passed" if result.passed else "content_security_rejected",
+        target_type=target_type,
+        detail={
+            "media_type": media_type,
+            "scene": scene,
+            "errcode": payload.get("errcode"),
+            "suggest": result_payload.get("suggest"),
+            "label": result_payload.get("label"),
+            **(detail or {}),
+        },
+    )
 
 
 def _prepare_image_for_check(image_path: Path) -> bytes:
