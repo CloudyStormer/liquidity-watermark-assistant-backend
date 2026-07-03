@@ -16,6 +16,13 @@ from app.repositories import (
 from app.schemas.common import UserProfileResponse, UserResponse
 from app.schemas.requests import LoginRequest, QuotaGrantRequest, WeappLoginRequest
 from app.schemas.responses import DailyQuotaResponse, OperationLogResponse
+from app.services.content_security import (
+    CONTENT_CHECK_UNAVAILABLE_MESSAGE,
+    CONTENT_RISK_MESSAGE,
+    ContentSecurityUnavailable,
+    ContentSecurityViolation,
+    ensure_safe_image,
+)
 from app.services.logging import log_operation
 from app.services.weapp_auth import WeappLoginConfigError, exchange_code_for_session
 
@@ -95,6 +102,15 @@ async def upload_avatar(
             if total > AVATAR_MAX_BYTES:
                 raise HTTPException(status_code=413, detail="Avatar file is too large")
             output_file.write(chunk)
+
+    try:
+        ensure_safe_image(openid, avatar_path, scene=1)
+    except ContentSecurityViolation as exc:
+        avatar_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=CONTENT_RISK_MESSAGE) from exc
+    except ContentSecurityUnavailable as exc:
+        avatar_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=503, detail=CONTENT_CHECK_UNAVAILABLE_MESSAGE) from exc
 
     user = upsert_user(openid=openid, avatar_url=f"/api/users/{openid}/avatar")
     log_operation(

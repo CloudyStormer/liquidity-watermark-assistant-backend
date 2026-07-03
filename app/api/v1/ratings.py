@@ -5,6 +5,13 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.repositories import create_rating, get_user, list_ratings
 from app.schemas.requests import RatingRequest
 from app.schemas.responses import RatingResponse
+from app.services.content_security import (
+    CONTENT_CHECK_UNAVAILABLE_MESSAGE,
+    CONTENT_RISK_MESSAGE,
+    ContentSecurityUnavailable,
+    ContentSecurityViolation,
+    ensure_safe_text,
+)
 from app.services.logging import log_operation
 
 router = APIRouter()
@@ -13,6 +20,13 @@ router = APIRouter()
 @router.post("", response_model=RatingResponse, status_code=201)
 def submit_rating(payload: RatingRequest, request: Request) -> RatingResponse:
     _require_logged_in(payload.openid)
+    try:
+        ensure_safe_text(payload.openid, payload.comment, scene=2)
+    except ContentSecurityViolation as exc:
+        raise HTTPException(status_code=400, detail=CONTENT_RISK_MESSAGE) from exc
+    except ContentSecurityUnavailable as exc:
+        raise HTTPException(status_code=503, detail=CONTENT_CHECK_UNAVAILABLE_MESSAGE) from exc
+
     rating = create_rating(
         openid=payload.openid,
         score=payload.score,

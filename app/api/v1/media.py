@@ -1,4 +1,5 @@
 import json
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -27,6 +28,13 @@ from app.repositories import (
 )
 from app.schemas.common import CleanupMethod, MediaType
 from app.schemas.responses import Md5FileResponse, MediaJobResponse
+from app.services.content_security import (
+    CONTENT_CHECK_UNAVAILABLE_MESSAGE,
+    CONTENT_RISK_MESSAGE,
+    ContentSecurityUnavailable,
+    ContentSecurityViolation,
+    ensure_safe_image,
+)
 from app.services.file_hashing import calculate_md5, create_unique_media_copy
 from app.services.logging import log_operation
 from app.services.media_processing import (
@@ -81,6 +89,28 @@ async def create_upload_job(
             detail={"reason": "invalid_upload", "error": str(exc), "filename": file.filename},
         )
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if saved.media_type == MediaType.IMAGE:
+        try:
+            ensure_safe_image(openid, saved.source_path, scene=1)
+        except ContentSecurityViolation as exc:
+            shutil.rmtree(saved.source_path.parent, ignore_errors=True)
+            log_operation(
+                request,
+                openid=openid,
+                action="media_upload_rejected",
+                detail={"reason": "content_risk", "filename": file.filename},
+            )
+            raise HTTPException(status_code=400, detail=CONTENT_RISK_MESSAGE) from exc
+        except ContentSecurityUnavailable as exc:
+            shutil.rmtree(saved.source_path.parent, ignore_errors=True)
+            log_operation(
+                request,
+                openid=openid,
+                action="media_upload_rejected",
+                detail={"reason": "content_check_unavailable", "filename": file.filename},
+            )
+            raise HTTPException(status_code=503, detail=CONTENT_CHECK_UNAVAILABLE_MESSAGE) from exc
 
     quota = consume_daily_quota(openid)
     if quota is None:

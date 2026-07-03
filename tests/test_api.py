@@ -10,6 +10,7 @@ from app.main import app
 
 settings.database_path = "storage/test_app.db"
 settings.storage_dir = "storage/test_files"
+settings.weapp_content_security_enabled = False
 init_db()
 
 client = TestClient(app)

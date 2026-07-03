@@ -20,8 +20,13 @@ class Settings(BaseSettings):
     ai_inpaint_timeout_seconds: float = 45.0
     weapp_appid: str = ""
     weapp_secret: str = ""
+    weapp_content_security_enabled: bool = True
+    weapp_access_token_url: str = "https://api.weixin.qq.com/cgi-bin/token"
     weapp_code2session_url: str = "https://api.weixin.qq.com/sns/jscode2session"
+    weapp_msg_sec_check_url: str = "https://api.weixin.qq.com/wxa/msg_sec_check"
+    weapp_img_sec_check_url: str = "https://api.weixin.qq.com/wxa/img_sec_check"
     weapp_login_timeout_seconds: float = 6.0
+    weapp_sec_check_timeout_seconds: float = 10.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -47,6 +52,10 @@ class Settings(BaseSettings):
     @property
     def weapp_login_configured(self) -> bool:
         return bool(self.weapp_appid and self.weapp_secret)
+
+    @property
+    def weapp_content_security_configured(self) -> bool:
+        return self.weapp_content_security_enabled and self.weapp_login_configured
 
 
 @lru_cache
